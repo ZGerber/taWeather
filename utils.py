@@ -7,9 +7,7 @@ Author: Z. Gerber
 Date: August 2024
 """
 from pathlib import Path
-import re
 import xml.etree.ElementTree as ET
-from clouds import Clouds
 from datetime import datetime, timedelta
 from typing import List, Union, Dict, Tuple
 
@@ -58,44 +56,6 @@ def parse_time_string(time_str: str, format_str: str = "%H:%M:%S") -> datetime:
         datetime: Corresponding datetime object.
     """
     return datetime.strptime(time_str, format_str)
-
-
-def extract_weather_data(weat_code_dict: Dict[int, str], run_start: int, run_end: int) -> \
-        Tuple[Dict[int, Clouds], Dict[int, Clouds], Dict[int, Clouds], Dict[int, Clouds]]:
-    """
-    Categorize weather code dictionary based on the detector's origin (local vs remote) and the time window.
-
-    Args:
-        weat_code_dict (Dict[int, str]): Dictionary of weather codes keyed by timestamp.
-        run_start (int): Start time of the run in seconds since midnight.
-        run_end (int): End time of the run in seconds since midnight.
-
-    Returns:
-        Tuple[Dict[int, Clouds], Dict[int, Clouds], Dict[int, Clouds], Dict[int, Clouds]]:
-            Four dictionaries categorizing the weather codes:
-            - Local detector weather codes
-            - Remote detector weather codes
-            - Preliminary weather codes
-            - Post-run weather codes
-    """
-    local_weat = remote_weat = preliminary_weat = postrun_weat = {}
-
-    for timestamp, code in weat_code_dict.items():
-        match = re.findall(r'\d{7}', code)
-        if timestamp < run_start:
-            if match:
-                preliminary_weat[timestamp] = Clouds.from_string(match[0])
-        elif timestamp > run_end:
-            if match:
-                postrun_weat[timestamp] = Clouds.from_string(match[0])
-        elif code.isnumeric():
-            local_weat[timestamp] = Clouds.from_string(code)
-        elif match:
-            remote_weat[timestamp] = Clouds.from_string(match[0])
-        else:
-            print(f"WARNING: Entry at time={timestamp} does not contain a valid 7-digit code!")
-
-    return local_weat, remote_weat, preliminary_weat, postrun_weat
 
 
 def filter_corrections(weather_times: List[int], time_window: int = 600) -> List[int]:

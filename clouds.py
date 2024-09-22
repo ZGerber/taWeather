@@ -94,7 +94,7 @@ class Clouds:
 
         def time_weighted_average(a, b):
             return int(
-                Decimal((b * weight_second + a * weight_first) / (weight_first + weight_second)).to_integral_value(
+                Decimal((a * weight_second + b * weight_first) / (weight_first + weight_second)).to_integral_value(
                     rounding=ROUND_HALF_UP))
 
         comparison_strategies = {
@@ -102,7 +102,8 @@ class Clouds:
             "worse": max,
             "average": average,
             "latest": lambda first, second: second,
-            "twavg": time_weighted_average}
+            "twavg": time_weighted_average
+        }
 
         comparison_function = comparison_strategies.get(algorithm)
         if not comparison_function:
