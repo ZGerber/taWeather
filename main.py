@@ -9,6 +9,10 @@ import re
 import os
 import argparse
 
+# Sometimes runners arrive early, and codes are entered before midnight UTC.
+MIN_SEC = 61200  # Corresponds to 11am MT  (17:00 UTC)
+MAX_SEC = 86400  # Corresponds to 6pm MT (midnight UTC)
+
 
 def parse_user_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -33,13 +37,15 @@ def grep_run_log(infile_path: Path) -> Tuple[
         if tag == "dataNOCUTS":
             if "parts" in attrib:
                 n_parts = int(attrib.get('parts'))
-            else:
+            elif child.find("clock") is not None:
                 data_part_clock = child.find("clock")
                 start_time = parse_time_string(data_part_clock.attrib.get('start'))
                 start_time_list.append(start_time)
                 if data_part_clock.attrib.get("stop"):
                     stop_time = parse_time_string(data_part_clock.attrib.get('stop'))
                     stop_time_list.append(stop_time)
+            elif child.find("clock") is None:
+                n_parts = n_parts - 1
         elif tag == "alarm" and child.text == "Emergency Stop!":
             emergency_stop_list.append(parse_time_string(attrib.get("time")))
         elif tag == "auto-stop":
@@ -47,6 +53,8 @@ def grep_run_log(infile_path: Path) -> Tuple[
             stop_time_list.append(run_end_time)
         elif tag == "weather":
             weat_code_dict[parse_time_string(attrib.get('time'))] = child.text
+        else:
+            continue
 
     if not n_parts:
         raise SystemExit("No data parts found!")
@@ -57,9 +65,12 @@ def grep_run_log(infile_path: Path) -> Tuple[
     for e in emergency_stop_list:
         if e < min(start_time_list):
             continue
-        if e > run_end_time:
+        elif e > run_end_time:
             stop_time_list.append(e)
             break
+        elif e
+        else:
+            stop_time_list.append(e)
 
     # Convert datetimes to seconds since midnight
     start_secs = convert_to_seconds(start_time_list)
@@ -67,6 +78,7 @@ def grep_run_log(infile_path: Path) -> Tuple[
     run_end_sec = convert_to_seconds(run_end_time)
     weat_code_secs = {convert_to_seconds(dt): code for dt, code in weat_code_dict.items()}
 
+    # for start, stop, end, weat in zip(start_secs, stop_secs, run_end_sec, weat_code_secs):
     return n_parts, sorted(start_secs), sorted(stop_secs), run_end_sec, weat_code_secs
 
 
@@ -94,15 +106,18 @@ def extract_weather_data(weat_code_dict: Dict[int, str], run_start: int, run_end
     postrun_weat = {}
 
     for timestamp, code in weat_code_dict.items():
-        match = re.findall(r'\d{7}', code)
+        local_match   = re.findall(r'\d{7}', code)
+        remote_match  = re.match(r'\[(.*?)]\s*(\d{7})', code, re.I)
+        if MIN_SEC < timestamp < MAX_SEC:
+            timestamp = timestamp - 43200*2
         if timestamp < run_start:
-            preliminary_weat[timestamp] = Clouds.from_string(match[0])
+            preliminary_weat[timestamp] = Clouds.from_string(local_match[0])
         elif timestamp > run_end:
-            postrun_weat[timestamp] = Clouds.from_string(match[0])
-        elif code.isnumeric():
-            local_weat[timestamp] = Clouds.from_string(code)
-        elif match:
-            remote_weat[timestamp] = Clouds.from_string(match[0])
+            postrun_weat[timestamp] = Clouds.from_string(local_match[0])
+        elif remote_match:
+            remote_weat[timestamp] = Clouds.from_string(remote_match.group(2))
+        elif local_match:
+            local_weat[timestamp] = Clouds.from_string(local_match[0])
         else:
             print(f"WARNING: Entry at time={timestamp} does not contain a valid 7-digit code!")
 
@@ -149,13 +164,17 @@ if __name__ == "__main__":
     local_timestamps  = [k for k in local_weat]
     remote_timestamps = [k for k in remote_weat]
 
-    # If more than one preliminary (postrun) weat code, only take the most recent (first).
-    preliminary_code = list(preliminary_weat.values())[-1]
-    preliminary_time = int(list(preliminary_weat.keys())[-1])
+    # If more than one preliminary weat code, only take the most recent.
+    if preliminary_weat:
+        preliminary_code = list(preliminary_weat.values())[-1]
+        preliminary_time = int(list(preliminary_weat.keys())[-1])
 
-    # Add the preliminary weather and time as a local source:
-    local_timestamps.append(preliminary_time)
-    local_weat[preliminary_time] = preliminary_code
+        # Add the preliminary weather and time as a local source:
+        local_timestamps.append(preliminary_time)
+        local_weat[preliminary_time] = preliminary_code
+    else:
+        preliminary_code = None
+        preliminary_time = None
 
     local_timestamps = sorted(local_timestamps)
     remote_timestamps = sorted(remote_timestamps)
@@ -176,7 +195,10 @@ if __name__ == "__main__":
     remote_weat_filtered       = [remote_weat[t] for t in remote_timestamps_filtered]
 
     # Create dictionary of DataPart objects. Start with the preliminary weather code ("part 0").
-    data_parts = {0: DataPart(0, 0, 0, 0, 0, preliminary_code, preliminary_time, "local")}
+    if preliminary_code and preliminary_time:
+        data_parts = {0: DataPart(0, 0, 0, 0, 0, preliminary_code, preliminary_time, "local")}
+    else:
+        data_parts = {0: DataPart(0, 0, 0, 0, 0, None, None, None)}
     output_files = {}
 
     # Loop over data parts and assign weather codes and timestamps to each part.
@@ -221,16 +243,18 @@ if __name__ == "__main__":
         data_part_outfile = Path(f"/home/zane/software/txhybrid/weather_files/{detector}/{year}{month}{day}/y{year}m{month.zfill(2)}d{day.zfill(2)}p{str(part_num).zfill(3)}.{detector}.weather.log")
         output_files[part_num] = data_part_outfile
         # with open(data_part_outfile, "w") as weat_out:
-
-    for (_, dp) in data_parts.items():
-        print(dp)
+    #
+    # for (_, dp) in data_parts.items():
+    #     print(dp)
 
     # Plot the night data
-    plot_night(local_timestamps, remote_timestamps, np.asarray(start_secs), np.asarray(stop_secs), mid_secs)
+    # plot_night(local_timestamps, remote_timestamps, np.asarray(start_secs), np.asarray(stop_secs), mid_secs)
     # print(output_files)
 
     for i, dp in data_parts.items():
         if dp.part_number == 0:
+            if not dp.weat_code:
+                dp.weat_code = data_parts[1].weat_code
             continue
         else:
             out = output_files.get(dp.part_number)
@@ -240,3 +264,6 @@ if __name__ == "__main__":
                     outfile.write(f"{dp.start_time}   {data_parts[i-1].weat_code.to_string()}   {dp.weat_code.to_string()}   {dp.weat_code.to_string()}\n")
                 else:
                     outfile.write(f"{dp.start_time}   {data_parts[i-1].weat_code.to_string()}   {dp.weat_code.to_string()}   {data_parts[i+1].weat_code.to_string()}\n")
+
+    # for (_, dp) in data_parts.items():
+    #     print(dp)
