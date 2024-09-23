@@ -76,3 +76,7 @@ def filter_corrections(weather_times: List[int], time_window: int = 600) -> List
             filtered_times.append(current_time)
         prev_time = current_time
     return filtered_times
+
+
+def nearest(items, pivot):
+    return min([i for i in items if i >= pivot], key=lambda x: abs(x - pivot))
