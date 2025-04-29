@@ -216,18 +216,8 @@ def insert_remote_timestamps(local, remote, max_diff=3600):
     return new_local, new_remote
 
 
-if __name__ == "__main__":
-    # os.environ["detector"] = "brtax4"
-    args = parse_user_args()
-    detector = args.detector
-    infile = args.infile
-
-    # Load the detector environmental variable
-    # detector = os.environ["detector"]
-
-    # Update the path to point to your XML file
-    path_to_log = Path(args.infile)
-
+def parse_log_file(path_to_log: Path) -> Tuple[int, List[int], List[int], int, Dict[int, str]]:
+    """Parse the log file and return relevant data."""
     print(f"\nParsing weather from {path_to_log.stem} ...")
 
     logfile_info = re.findall(r'\d+', path_to_log.stem)
@@ -239,12 +229,12 @@ if __name__ == "__main__":
     # Extract data from the log file
     n_data_parts, start_secs, stop_secs, run_end_sec, weather_dict = grep_run_log(path_to_log)
 
-    # Calculate mid points between start and stop times
-    mid_secs = (np.asarray(start_secs) + np.asarray(stop_secs)) / 2
+    return n_data_parts, start_secs, stop_secs, run_end_sec, weather_dict, year, month, day
 
-    # The maximum amount of time that a data part can last:
-    max_secs = np.asarray(start_secs) + 20 * 60
 
+def process_weather_data(weather_dict: Dict[int, str], start_secs: List[int], stop_secs: List[int]) -> Tuple[
+    List[int], List[int], List[Clouds], List[Clouds], Dict[int, Clouds], int, int, Clouds, int]:
+    """Process weather data and return relevant information."""
     # Remove corrections from weather codes
     weat_sec_keys = filter_corrections(list(weather_dict.keys()))
 
@@ -286,28 +276,23 @@ if __name__ == "__main__":
     local_weat_filtered = [local_weat[t] for t in local_timestamps_filtered]
     remote_weat_filtered = [remote_weat[t] for t in remote_timestamps_filtered]
 
-    if detector == "brtax4":
-        night_weat = {}
-        updated_local_timestamps, updated_remote_timestamps = insert_remote_timestamps(local_timestamps_filtered,
-                                                                                       remote_timestamps_filtered,
-                                                                                       max_diff=3600 * 2)
-        local_timestamps_filtered = updated_local_timestamps
-        remote_timestamps_filtered = updated_remote_timestamps
+    return local_timestamps_filtered, remote_timestamps_filtered, local_weat_filtered, remote_weat_filtered, local_weat, preliminary_code, preliminary_time, postrun_code, postrun_time
 
-        for t in local_timestamps_filtered:
-            if t in local_weat.keys():
-                night_weat[t] = local_weat[t]
-            elif t in remote_weat.keys():
-                night_weat[t] = remote_weat[t]
-        local_timestamps_filtered = list(night_weat.keys())
-        local_weat_filtered = list(night_weat.values())
+
+def create_data_parts(n_data_parts: int, start_secs: List[int], stop_secs: List[int], local_timestamps_filtered: List[int],
+                      local_weat_filtered: List[Clouds], preliminary_code: Clouds, preliminary_time: int) -> Dict[int, DataPart]:
+    """Create DataPart objects and assign weather codes."""
+    # Calculate mid points between start and stop times
+    mid_secs = (np.asarray(start_secs) + np.asarray(stop_secs)) / 2
+
+    # The maximum amount of time that a data part can last:
+    max_secs = np.asarray(start_secs) + 20 * 60
 
     # Create dictionary of DataPart objects. Start with the preliminary weather code ("part 0").
     if preliminary_code and preliminary_time:
         data_parts = {0: DataPart(0, 0, 0, 0, 0, preliminary_code, preliminary_time, "local")}
     else:
         data_parts = {0: DataPart(0, 0, 0, 0, 0, None, None, None)}
-    output_files = {}
 
     # Loop over data parts and assign weather codes and timestamps to each part.
     for part_num, (part_start, part_mid, part_end, part_max) in enumerate(
@@ -348,22 +333,18 @@ if __name__ == "__main__":
                              "local")
 
         data_parts[part_info.part_number] = part_info
+
+    return data_parts
+
+
+def write_output_files(data_parts: Dict[int, DataPart], n_data_parts: int, year: str, month: str, day: str, detector: str) -> None:
+    """Write the output files based on DataPart objects."""
+    output_files = {}
+
+    for part_num, dp in data_parts.items():
         data_part_outfile = Path(
             f"/home/zane/software/txhybrid/weather_files/{detector}/{year}{month}{day}/y{year}m{month.zfill(2)}d{day.zfill(2)}p{str(part_num).zfill(3)}.{detector}.weather.log")
         output_files[part_num] = data_part_outfile
-        # with open(data_part_outfile, "w") as weat_out:
-    #
-    # for (_, dp) in data_parts.items():
-    #     print(dp)
-
-    # Plot the night data
-    # plot_night(local_timestamps_filtered, remote_timestamps_filtered, np.asarray(start_secs), np.asarray(stop_secs), mid_secs)
-    #
-    # plot_night(updated_local_timestamps, updated_remote_timestamps,
-    #                np.asarray(start_secs), np.asarray(stop_secs),
-    #                mid_secs)
-    # plot_night(updated_local_timestamps, [], np.asarray(start_secs), np.asarray(stop_secs),
-    #                mid_secs)
 
     for i, dp in data_parts.items():
         if dp.part_number == 0:
@@ -381,5 +362,36 @@ if __name__ == "__main__":
                     outfile.write(
                         f"{dp.start_time}   {data_parts[i - 1].weat_code.to_string()}   {dp.weat_code.to_string()}   {data_parts[i + 1].weat_code.to_string()}\n")
 
-    # for (_, dp) in data_parts.items():
-    #     print(dp)
+
+if __name__ == "__main__":
+    args = parse_user_args()
+    detector = args.detector
+    infile = args.infile
+
+    path_to_log = Path(infile)
+
+    n_data_parts, start_secs, stop_secs, run_end_sec, weather_dict, year, month, day = parse_log_file(path_to_log)
+
+    local_timestamps_filtered, remote_timestamps_filtered, local_weat_filtered, remote_weat_filtered, local_weat, preliminary_code, preliminary_time, postrun_code, postrun_time = process_weather_data(
+        weather_dict, start_secs, stop_secs)
+
+    if detector == "brtax4":
+        night_weat = {}
+        updated_local_timestamps, updated_remote_timestamps = insert_remote_timestamps(local_timestamps_filtered,
+                                                                                       remote_timestamps_filtered,
+                                                                                       max_diff=3600 * 2)
+        local_timestamps_filtered = updated_local_timestamps
+        remote_timestamps_filtered = updated_remote_timestamps
+
+        for t in local_timestamps_filtered:
+            if t in local_weat.keys():
+                night_weat[t] = local_weat[t]
+            elif t in remote_weat.keys():
+                night_weat[t] = remote_weat[t]
+        local_timestamps_filtered = list(night_weat.keys())
+        local_weat_filtered = list(night_weat.values())
+
+    data_parts = create_data_parts(n_data_parts, start_secs, stop_secs, local_timestamps_filtered, local_weat_filtered,
+                                   preliminary_code, preliminary_time)
+
+    write_output_files(data_parts, n_data_parts, year, month, day, detector)
